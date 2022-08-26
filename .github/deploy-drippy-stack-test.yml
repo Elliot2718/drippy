@@ -1,0 +1,13 @@
+name: deploy_drippy
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: deploy_drippy
+      uses: aws-actions/aws-cloudformation-github-deploy@v1
+      with:
+        name: drippy_stack_test
+        template: ../.aws/drippy-stack-test.yml
