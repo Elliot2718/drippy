@@ -1,2 +1,2 @@
 # drippy
-Drip system data collection and automation
+Drip system data collection and automation.
