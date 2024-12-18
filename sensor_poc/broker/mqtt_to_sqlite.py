@@ -1,3 +1,10 @@
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#     "paho-mqtt",
+# ]
+# ///
+
 import sqlite3
 import paho.mqtt.client as mqtt
 import os
@@ -65,6 +72,7 @@ def on_message(client, userdata, msg):
     """
     The callback for when a PUBLISH message is received from the server.
     """
+    conn, cursor = userdata
     value = msg.payload.decode()
     print(f"Received message: {value} on topic: {msg.topic}")
     cursor.execute("INSERT INTO readings (topic, value) VALUES (?, ?)", (msg.topic, value))
@@ -80,7 +88,7 @@ def main():
     load_env()
 
     # Initialize the database
-    conn, cursor = init_db()
+    conn, cursor = init_db(DATABASE)
 
     # Set up the MQTT client
     client_id = os.environ.get("CLIENT_ID")
@@ -89,6 +97,7 @@ def main():
     client = mqtt.Client(client_id=client_id)
     client.on_connect = on_connect
     client.on_message = on_message
+    client.user_data_set((conn, cursor))
 
     try:
         client.connect(mqtt_broker, 1883, 60)  # Connect to the MQTT broker
