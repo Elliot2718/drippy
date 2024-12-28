@@ -1,5 +1,5 @@
 """
-Micropython script to read temperature sensor data and publish it to an MQTT broker.
+Micropython script to read sensor data and publish it to an MQTT broker.
 """
 
 import network
@@ -8,8 +8,8 @@ from umqtt.simple import MQTTClient
 from machine import Pin, ADC
 
 
-MQTT_TOPIC = "sensors/temperature"
-CLIENT_ID = "pico_client"
+tip_count = 0
+last_published_tip_count = 0
 
 
 def load_env(file_path: str =".env") -> dict:
@@ -66,47 +66,74 @@ def connect_wifi(wifi_ssid: str, wifi_password: str) -> bool:
     return True  # Return True if connection succeeds
 
 
-def read_pico_temperature() -> float:
-    adc = ADC(Pin(26))  # Analog pin for a temperature sensor
+def connect_mqtt(broker_ip, port, client_id):
+    client = MQTTClient(client_id, broker_ip, port=1883)
+    client.connect()
+    print("Connected to MQTT Broker")
+    return client
 
-    # Example: Read analog sensor value
+
+def read_onboard_temperature() -> float:
+    """
+    Reads the onboard temperature sensor and converts it to Fahrenheit.
+    """
+    adc = ADC(4)  # ADC Channel 4 for onboard temperature sensor
     raw_value = adc.read_u16()
-    # Convert to a meaningful value (e.g., temperature in Celsius)
-    temperature = (raw_value / 65535) * 100  # Example scaling
-    return round(temperature, 2)
+    voltage = (raw_value / 65535) * 3.3  # Scale to 3.3V reference
+
+    temperature_celsius = 27 - (voltage - 0.706) / 0.001721
+    temperature_fahrenheit = (temperature_celsius * 9/5) + 32
+
+    return round(temperature_fahrenheit, 2)
+
+
+def rainfall_handler(pin):
+    global tip_count
+    tip_count += 1
+    print(f"Number of tips: {tip_count}")
 
 
 def main():
-    # Load the .env file
+    global tip_count, last_published_tip_count
+    
     env_vars = load_env()
-
     wifi_ssid = env_vars.get("WIFI_SSID")
     wifi_password = env_vars.get("WIFI_PASSWORD")
     mqtt_broker_ip = env_vars.get("MQTT_BROKER_IP")
+    mqtt_broker_port = env_vars.get("MQTT_BROKER_PORT")
+    mqtt_client_id = env_vars.get("MQTT_CLIENT_ID")
 
-    # Connect to WiFi
     connect_wifi(wifi_ssid=wifi_ssid, wifi_password=wifi_password)
+    client = connect_mqtt(broker_ip=mqtt_broker_ip, port=mqtt_broker_port, client_id=mqtt_client_id)
 
-    # Connect to MQTT broker
-    client = MQTTClient(CLIENT_ID, mqtt_broker_ip, port=1883)
-    client.connect()
-    print("Connected to MQTT Broker")
+    # Set up the tipping bucket interrupt
+    tipping_bucket = Pin(22, Pin.IN, Pin.PULL_UP)
+    tipping_bucket.irq(trigger=Pin.IRQ_FALLING, handler=rainfall_handler)
 
     try:
         while True:
-            # Read sensor value
-            temperature = read_pico_temperature()
-            print("Temperature:", temperature)
+            # Read temperature
+            temperature = read_onboard_temperature()
+            print(f"Temperature: {temperature}°C")
 
-            # Publish sensor reading
-            client.publish(MQTT_TOPIC, str(temperature))
-            print(f"Published to {MQTT_TOPIC}: {temperature}")
+            # Publish temperature
+            client.publish("sensors/onboard_temperature", str(temperature))
+            print(f"Published onboard temperature: {temperature}°F.")
 
-            # Wait for the next reading
+            # Publish rainfall count
+            if tip_count != last_published_tip_count:
+                client.publish("sensors/rainfall", str(tip_count))
+                print(f"Published rainfall count: {tip_count}.")
+                last_published_tip_count = tip_count
+
+
+            # Wait before next loop
             time.sleep(5)
     except KeyboardInterrupt:
-        print("Disconnected")
+        print("Stopping sensors...")
+    finally:
         client.disconnect()
 
 # Run the main function
-main()
+if __name__ == "__main__":
+    main()
