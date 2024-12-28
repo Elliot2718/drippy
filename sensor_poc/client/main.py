@@ -8,6 +8,7 @@ from umqtt.simple import MQTTClient
 from machine import Pin, ADC
 
 
+last_published_onboard_temperature = 0
 tip_count = 0
 last_published_tip_count = 0
 
@@ -94,7 +95,7 @@ def rainfall_handler(pin):
 
 
 def main():
-    global tip_count, last_published_tip_count
+    global last_published_onboard_temperature, tip_count, last_published_tip_count
     
     env_vars = load_env()
     wifi_ssid = env_vars.get("WIFI_SSID")
@@ -114,11 +115,12 @@ def main():
         while True:
             # Read temperature
             temperature = read_onboard_temperature()
-            print(f"Temperature: {temperature}°C")
 
             # Publish temperature
-            client.publish("sensors/onboard_temperature", str(temperature))
-            print(f"Published onboard temperature: {temperature}°F.")
+            if temperature != last_published_onboard_temperature:
+                client.publish("sensors/onboard_temperature", str(temperature))
+                print(f"Published onboard temperature: {temperature}°F.")
+                last_published_onboard_temperature = temperature
 
             # Publish rainfall count
             if tip_count != last_published_tip_count:
