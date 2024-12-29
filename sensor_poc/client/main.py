@@ -74,7 +74,7 @@ def get_precise_timestamp() -> str:
     return f"{unix_time:.0f}.{millis:03d}"
 
 
-def format_precise_timestamp(precise_timestamp) -> str:
+def format_precise_timestamp(precise_timestamp: str) -> str:
     """
     Convert a precise timestamp (seconds.milliseconds) into a human-readable timestamp.
     """
@@ -107,7 +107,7 @@ def read_onboard_temperature() -> float:
     return round(temperature_fahrenheit, 2)
 
 
-def rainfall_handler(pin):
+def rainfall_handler(pin: int) -> list:
     """
     ISR for the tipping bucket sensor. Buffers a message for each tip.
     """
@@ -118,7 +118,7 @@ def rainfall_handler(pin):
     print(f"Bucket tip recorded at {format_precise_timestamp(timestamp)}")
 
 
-def publish_messages(client: MQTTClient):
+def publish_messages(client: MQTTClient) -> None:
     """
     Publish all unsent messages to MQTT, continuing even if some fail.
     """
