@@ -4,13 +4,12 @@ Micropython script to read sensor data and publish it to an MQTT broker.
 
 import network
 import time
+import ujson
 from umqtt.simple import MQTTClient
 from machine import Pin, ADC
 
-
-last_published_onboard_temperature = 0
-tip_count = 0
-last_published_tip_count = 0
+# Global variables
+unsent_messages = []
 
 
 def load_env(file_path: str =".env") -> dict:
@@ -74,6 +73,64 @@ def connect_mqtt(broker_ip, port, client_id):
     return client
 
 
+def get_precise_timestamp():
+    # Current Unix timestamp in seconds
+    unix_time = time.time()
+    # Current milliseconds within the second
+    millis = time.ticks_ms() % 1000
+    # Combine seconds and milliseconds
+    return f"{unix_time}.{millis:03d}"
+
+
+def format_precise_timestamp(precise_timestamp):
+    """
+    Converts a precise timestamp (seconds.milliseconds) into a human-readable timestamp.
+    
+    Args:
+        precise_timestamp (str or float): Precise Unix timestamp (e.g., "1672531200.123" or 1672531200.123).
+    
+    Returns:
+        str: Human-readable timestamp in the format YYYY-MM-DD HH:MM:SS.mmm
+    """
+    # Handle float input
+    if isinstance(precise_timestamp, float):
+        seconds = int(precise_timestamp)  # Extract the seconds part
+        millis = int((precise_timestamp - seconds) * 1000)  # Extract the milliseconds part
+    # Handle string input
+    elif isinstance(precise_timestamp, str):
+        seconds, millis = precise_timestamp.split(".")
+        seconds = int(seconds)
+        millis = int(millis)
+    else:
+        raise ValueError("Input must be a string or float representing the precise timestamp.")
+    
+    # Convert the seconds part to a human-readable format
+    local_time = time.localtime(seconds)
+    formatted_time = "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}.{:03d}".format(
+        local_time[0],  # Year
+        local_time[1],  # Month
+        local_time[2],  # Day
+        local_time[3],  # Hour
+        local_time[4],  # Minute
+        local_time[5],  # Second
+        millis          # Milliseconds
+    )
+    return formatted_time
+
+
+def publish_with_retries(client, topic, message):
+    """
+    Attempts to publish a message. If it fails, stores the message in the buffer for retry.
+    """
+    global message_buffer
+    try:
+        client.publish(topic, message)
+        print(f"Published to {topic}: {message}")
+    except Exception as e:
+        print(f"Publish failed: {e}. Adding message to buffer.")
+        message_buffer.append((topic, message))
+
+
 def read_onboard_temperature() -> float:
     """
     Reads the onboard temperature sensor and converts it to Fahrenheit.
@@ -89,13 +146,37 @@ def read_onboard_temperature() -> float:
 
 
 def rainfall_handler(pin):
-    global tip_count
-    tip_count += 1
-    print(f"Number of tips: {tip_count}")
+    """
+    ISR for the tipping bucket sensor. Buffers a message for each tip.
+    """
+    global unsent_messages
+    timestamp = get_precise_timestamp()  # Record the current timestamp
+    message = ujson.dumps({"timestamp": timestamp})
+    unsent_messages.append(("sensor/bucket_tip", message))
+    print(f"Bucket tip at {format_precise_timestamp(timestamp)}")
+
+
+def publish_messages(client):
+    """
+    Retries publishing all messages.
+    """
+    global unsent_messages
+    if not unsent_messages:
+        return
+
+    print(f"Publishing {len(unsent_messages)} messages...")
+    for topic, message in unsent_messages[:]:  # Iterate over a copy of the buffer
+        try:
+            client.publish(topic, message)
+            print(f"Successfully published message {message} to {topic}.")
+            unsent_messages.remove((topic, message))  # Remove from buffer
+        except Exception as e:
+            print(f"Failed to publish message to {topic}: {e}")
+            break  # Stop retrying if the connection is still down
 
 
 def main():
-    global last_published_onboard_temperature, tip_count, last_published_tip_count
+    global last_published_onboard_temperature, client
     
     env_vars = load_env()
     wifi_ssid = env_vars.get("WIFI_SSID")
@@ -113,24 +194,10 @@ def main():
 
     try:
         while True:
-            # Read temperature
-            temperature = read_onboard_temperature()
+            # Retry unsent messages
+            publish_messages(client)
 
-            # Publish temperature
-            if temperature != last_published_onboard_temperature:
-                client.publish("sensors/onboard_temperature", str(temperature))
-                print(f"Published onboard temperature: {temperature}°F.")
-                last_published_onboard_temperature = temperature
-
-            # Publish rainfall count
-            if tip_count != last_published_tip_count:
-                client.publish("sensors/rainfall", str(tip_count))
-                print(f"Published rainfall count: {tip_count}.")
-                last_published_tip_count = tip_count
-
-
-            # Wait before next loop
-            time.sleep(5)
+            time.sleep(5)  # Wait before the next cycle
     except KeyboardInterrupt:
         print("Stopping sensors...")
     finally:
