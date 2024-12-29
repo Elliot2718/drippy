@@ -67,10 +67,32 @@ def connect_wifi(wifi_ssid: str, wifi_password: str) -> bool:
 
 
 def connect_mqtt(broker_ip, port, client_id):
-    client = MQTTClient(client_id, broker_ip, port=1883)
-    client.connect()
-    print("Connected to MQTT Broker")
-    return client
+    """
+    Creates and connects an MQTT client to the broker.
+
+    Args:
+        broker_ip (str): IP address of the MQTT broker.
+        port (int): Port number for the MQTT connection.
+        client_id (str): Unique client ID for the MQTT connection.
+
+    Returns:
+        MQTTClient: Connected MQTT client instance.
+
+    Raises:
+        RuntimeError: If the client fails to connect.
+    """
+    try:
+        # Create the MQTT client
+        client = MQTTClient(client_id, broker_ip, port=port)
+        # Connect to the broker
+        client.connect()
+        print(f"Connected to MQTT Broker at {broker_ip}:{port} with Client ID '{client_id}'")
+        return client
+    except Exception as e:
+        # Handle connection failure
+        print(f"Error: Failed to connect to MQTT Broker at {broker_ip}:{port}.")
+        print(f"Details: {e}")
+        raise RuntimeError("Failed to connect to MQTT broker.") from e
 
 
 def get_precise_timestamp():
@@ -158,21 +180,23 @@ def rainfall_handler(pin):
 
 def publish_messages(client):
     """
-    Retries publishing all messages.
+    Retries publishing all messages, continuing even if some fail.
     """
     global unsent_messages
     if not unsent_messages:
         return
 
-    print(f"Publishing {len(unsent_messages)} messages...")
-    for topic, message in unsent_messages[:]:  # Iterate over a copy of the buffer
+    total_messages = len(unsent_messages)
+    print(f"Publishing {total_messages} messages...")
+    for index, (topic, message) in enumerate(unsent_messages[:]):  # Iterate over a copy of the buffer
         try:
             client.publish(topic, message)
-            print(f"Successfully published message {message} to {topic}.")
-            unsent_messages.remove((topic, message))  # Remove from buffer
+            print(f"Successfully published message {index + 1} of {total_messages}: {message} to topic {topic}.")
+            unsent_messages.remove((topic, message))  # Remove successfully published message
         except Exception as e:
-            print(f"Failed to publish message to {topic}: {e}")
-            break  # Stop retrying if the connection is still down
+            print(f"Failed to publish message {index + 1}: {message} to {topic}: {e}")
+            # Do not break; continue trying to send other messages
+    print(f"Done attempting to publish {total_messages} messages.")
 
 
 def main():
@@ -182,20 +206,29 @@ def main():
     wifi_ssid = env_vars.get("WIFI_SSID")
     wifi_password = env_vars.get("WIFI_PASSWORD")
     mqtt_broker_ip = env_vars.get("MQTT_BROKER_IP")
-    mqtt_broker_port = env_vars.get("MQTT_BROKER_PORT")
+    mqtt_broker_port = int(env_vars.get("MQTT_BROKER_PORT"))
     mqtt_client_id = env_vars.get("MQTT_CLIENT_ID")
 
-    connect_wifi(wifi_ssid=wifi_ssid, wifi_password=wifi_password)
-    client = connect_mqtt(broker_ip=mqtt_broker_ip, port=mqtt_broker_port, client_id=mqtt_client_id)
+    if not connect_wifi(wifi_ssid=wifi_ssid, wifi_password=wifi_password):
+        print("Failed to connect to Wi-Fi. Exiting.")
+        return
+
+    client = None
 
     # Set up the tipping bucket interrupt
     tipping_bucket = Pin(22, Pin.IN, Pin.PULL_UP)
     tipping_bucket.irq(trigger=Pin.IRQ_FALLING, handler=rainfall_handler)
 
+    
     try:
         while True:
-            # Retry unsent messages
-            publish_messages(client)
+            if client is None:
+                try:
+                    client = connect_mqtt(mqtt_broker_ip, mqtt_broker_port, mqtt_client_id)
+                except Exception as e:
+                    print(e)
+            elif client:
+                publish_messages(client)
 
             time.sleep(5)  # Wait before the next cycle
     except KeyboardInterrupt:
