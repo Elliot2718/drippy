@@ -2,6 +2,7 @@
 Micropython script to read sensor data and publish it to an MQTT broker.
 """
 
+import gc
 import network
 import time
 import ujson
@@ -10,7 +11,9 @@ from machine import Pin, ADC
 
 # Global variables
 unsent_messages = []
-
+led = machine.Pin("LED", machine.Pin.OUT)
+chg_pin = Pin(15, Pin.IN, Pin.PULL_UP)
+rainfall_timestamps = []
 
 def load_env(file_path: str =".env") -> dict:
     """
@@ -75,20 +78,10 @@ def get_precise_timestamp() -> str:
 
 
 def format_precise_timestamp(precise_timestamp: str) -> str:
-    """
-    Convert a precise timestamp (seconds.milliseconds) into a human-readable timestamp.
-    """
-    if isinstance(precise_timestamp, float):
-        seconds = int(precise_timestamp)
-        millis = int((precise_timestamp - seconds) * 1000)
-    elif isinstance(precise_timestamp, str):
-        seconds, millis = map(int, precise_timestamp.split("."))
-    else:
-        raise ValueError("Timestamp must be a string or float.")
-
+    seconds, millis = map(int, precise_timestamp.split("."))
     local_time = time.localtime(seconds)
     return (
-        f"{local_time[0]:04d}-{local_time[1]:02d}-{local_time[2]:02d}"
+        f"{local_time[0]:04d}-{local_time[1]:02d}-{local_time[2]:02d} "
         f"{local_time[3]:02d}:{local_time[4]:02d}:{local_time[5]:02d}.{millis:03d}"
     )
 
@@ -107,15 +100,19 @@ def read_onboard_temperature() -> float:
     return round(temperature_fahrenheit, 2)
 
 
+def read_chg_pin():
+    return chg_pin.value()
+    
+
 def rainfall_handler(pin: int) -> list:
     """
     ISR for the tipping bucket sensor. Buffers a message for each tip.
     """
-    global unsent_messages
-    timestamp = get_precise_timestamp()  # Record the current timestamp
-    message = ujson.dumps({"timestamp": timestamp})
-    unsent_messages.append(("sensor/rainfall", message))
-    print(f"Bucket tip recorded at {format_precise_timestamp(timestamp)}")
+    try:
+        rainfall_timestamps.append(get_precise_timestamp())
+    except:
+        pass  # Avoid crashing on memory errors or overflow
+
 
 
 def publish_messages(client: MQTTClient) -> None:
@@ -132,6 +129,83 @@ def publish_messages(client: MQTTClient) -> None:
             unsent_messages.remove((topic, message))
         except Exception as e:
             print(f"[{index + 1}] Failed to publish {message} to {topic}: {e}")
+
+
+def check_and_append_change(function, topic, timestamp, prior_value=None, change_threshold=None):
+    """
+    Check if the value of the pin has changed. If it has, append the change to unsent_messages.
+    """
+    current_value = function()
+
+    if prior_value is None or current_value != prior_value:
+        message = ujson.dumps({"timestamp": timestamp, "value": current_value})
+        unsent_messages.append((topic, message))
+        return current_value
+
+    if change_threshold is not None:
+        try:
+            if abs(current_value - prior_value) >= change_threshold:
+                message = ujson.dumps({"timestamp": timestamp, "value": current_value})
+                unsent_messages.append((topic, message))
+                return current_value
+        except TypeError:
+            pass
+    elif current_value != prior_value:
+        # Fall back to basic equality
+        message = ujson.dumps({"timestamp": timestamp, "value": current_value})
+        unsent_messages.append((topic, message))
+        return current_value
+
+    return prior_value
+
+
+def publish_status(client, reason="ok"):
+    message = ujson.dumps({
+        "timestamp": get_precise_timestamp(),
+        "status": reason,
+        "uptime": time.ticks_ms() // 1000
+    })
+    try:
+        client.publish("rain_gauge_1/status", message)
+        print(f"Published status: {message}")
+    except Exception as e:
+        print("Failed to publish status:", e)
+
+
+def publish_boot_status(client):
+    message = ujson.dumps({
+        "timestamp": get_precise_timestamp(),
+        "status": "boot",
+        "reason": "power_on"
+    })
+    try:
+        client.publish("rain_gauge_1/status/boot", message)
+        print("Published boot status.")
+    except Exception as e:
+        print("Failed to publish boot status:", e)
+
+
+def publish_heartbeat(client):
+    message = ujson.dumps({
+        "timestamp": get_precise_timestamp(),
+        "status": "ok",
+        "uptime": time.ticks_ms() // 1000,
+        "heap_free": gc.mem_free()
+    })
+    try:
+        client.publish("rain_gauge_1/status/heartbeat", message)
+        print("Published heartbeat.")
+    except Exception as e:
+        print("Failed to publish heartbeat:", e)
+
+
+def blink_led():
+    """
+    Toggle the state of the onboard LED.
+    """
+    led.value(True)
+    time.sleep(0.1)
+    led.value(False)
 
 
 def main():
@@ -152,20 +226,53 @@ def main():
     client = None
     tipping_bucket = Pin(22, Pin.IN, Pin.PULL_UP)
     tipping_bucket.irq(trigger=Pin.IRQ_FALLING, handler=rainfall_handler)
+
+    pgood_pin = Pin(16, Pin.IN, Pin.PULL_UP)
+
+    prior_temperature_value = None
+    prior_charge_value = None
     
+    heartbeat_interval = 300  # seconds
+    last_heartbeat_time = time.time()
+
     try:
         while True:
+            timestamp = get_precise_timestamp()
+
+            if time.time() - last_heartbeat_time >= heartbeat_interval:
+                publish_heartbeat(client)
+                last_heartbeat_time = time.time()
+
+            while rainfall_timestamps:
+                ts = rainfall_timestamps.pop(0)  # Remove the oldest timestamp
+                message = ujson.dumps({"timestamp": ts})
+                unsent_messages.append(("rain_gauge_1/sensors/rain_gauge_tips", message))
+                print(f"Bucket tip recorded at {format_precise_timestamp(ts)}")
+
+            prior_temperature_value = check_and_append_change(read_onboard_temperature, "rain_gauge_1/sensors/temperature", timestamp, prior_temperature_value, 1.0)
+
+            prior_charge_value = check_and_append_change(read_chg_pin, "rain_gauge_1/sensors/charge_value", timestamp, prior_charge_value)
+            
             if client is None:
                 client = connect_mqtt(mqtt_broker_ip, mqtt_broker_port, mqtt_client_id)
+                if client:
+                    publish_boot_status(client)
 
-            if client:
-                publish_messages(client)
+            if not client:
+                print("MQTT not connected — skipping publish cycle")
+                time.sleep(5)
+                continue
 
+            publish_messages(client)
+    
+            blink_led()
             time.sleep(5)  # Wait before the next cycle
     except KeyboardInterrupt:
         print("Stopping...")
     finally:
-        client.disconnect()
+        if client:
+            publish_status(client, reason="shutdown")
+            client.disconnect()
 
 # Run the main function
 if __name__ == "__main__":
