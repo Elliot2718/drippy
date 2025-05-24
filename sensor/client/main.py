@@ -131,27 +131,18 @@ def publish_messages(client: MQTTClient) -> None:
             print(f"[{index + 1}] Failed to publish {message} to {topic}: {e}")
 
 
-def check_and_append_change(function, topic, timestamp, prior_value=None, change_threshold=None):
-    """
-    Check if the value of the pin has changed. If it has, append the change to unsent_messages.
-    """
-    current_value = function()
-
-    if prior_value is None or current_value != prior_value:
+def check_and_append_change(current_value, topic, timestamp, prior_value=None, change_threshold=None):
+    if prior_value is None:
         message = ujson.dumps({"timestamp": timestamp, "value": current_value})
         unsent_messages.append((topic, message))
         return current_value
 
     if change_threshold is not None:
-        try:
-            if abs(current_value - prior_value) >= change_threshold:
-                message = ujson.dumps({"timestamp": timestamp, "value": current_value})
-                unsent_messages.append((topic, message))
-                return current_value
-        except TypeError:
-            pass
+        if abs(current_value - prior_value) >= change_threshold:
+            message = ujson.dumps({"timestamp": timestamp, "value": current_value})
+            unsent_messages.append((topic, message))
+            return current_value
     elif current_value != prior_value:
-        # Fall back to basic equality
         message = ujson.dumps({"timestamp": timestamp, "value": current_value})
         unsent_messages.append((topic, message))
         return current_value
@@ -249,9 +240,18 @@ def main():
                 unsent_messages.append(("rain_gauge_1/sensors/rain_gauge_tips", message))
                 print(f"Bucket tip recorded at {format_precise_timestamp(ts)}")
 
-            prior_temperature_value = check_and_append_change(read_onboard_temperature, "rain_gauge_1/sensors/temperature", timestamp, prior_temperature_value, 1.0)
+            current_temp = read_onboard_temperature()
+            timestamp = get_precise_timestamp()
 
-            prior_charge_value = check_and_append_change(read_chg_pin, "rain_gauge_1/sensors/charge_value", timestamp, prior_charge_value)
+            prior_temperature_value = check_and_append_change(
+                current_temp,
+                "rain_gauge_1/sensors/temperature",
+                timestamp,
+                prior_temperature_value,
+                change_threshold=1.0
+            )
+
+            prior_charge_value = check_and_append_change(read_chg_pin(), "rain_gauge_1/sensors/charge_value", timestamp, prior_charge_value)
             
             if client is None:
                 client = connect_mqtt(mqtt_broker_ip, mqtt_broker_port, mqtt_client_id)
@@ -277,3 +277,4 @@ def main():
 # Run the main function
 if __name__ == "__main__":
     main()
+
