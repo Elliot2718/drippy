@@ -9,10 +9,13 @@ import ujson
 from umqtt.simple import MQTTClient
 from machine import Pin, ADC
 
+from sensor.onboard_temperature import read_onboard_temperature
+from sensor.temperature import read_temperature
+
 # Global variables
 unsent_messages = []
 led = machine.Pin("LED", machine.Pin.OUT)
-chg_pin = Pin(15, Pin.IN, Pin.PULL_UP)
+temperature_pin = 26
 rainfall_timestamps = []
 
 def load_env(file_path: str =".env") -> dict:
@@ -54,12 +57,12 @@ def connect_wifi(wifi_ssid: str, wifi_password: str) -> bool:
     return False
 
 
-def connect_mqtt(broker_ip: str, port: int, client_id: str) -> MQTTClient:
+def connect_mqtt(broker_ip: str, port: int, client_id: str, user: str, password: str) -> MQTTClient:
     """
     Create and connect an MQTT client to the broker.
     """
     try:
-        client = MQTTClient(client_id, broker_ip, port=port)
+        client = MQTTClient(client_id, broker_ip, port=port, user=user, password=password)
         client.connect()
         print(f"Connected to MQTT Broker at {broker_ip}:{port}")
         return client
@@ -86,24 +89,6 @@ def format_precise_timestamp(precise_timestamp: str) -> str:
     )
 
 
-def read_onboard_temperature() -> float:
-    """
-    Reads the onboard temperature sensor and converts it to Fahrenheit.
-    """
-    adc = ADC(4)  # ADC Channel 4 for onboard temperature sensor
-    raw_value = adc.read_u16()
-    voltage = (raw_value / 65535) * 3.3  # Scale to 3.3V reference
-
-    temperature_celsius = 27 - (voltage - 0.706) / 0.001721
-    temperature_fahrenheit = (temperature_celsius * 9/5) + 32
-
-    return round(temperature_fahrenheit, 2)
-
-
-def read_chg_pin():
-    return chg_pin.value()
-    
-
 def rainfall_handler(pin: int) -> list:
     """
     ISR for the tipping bucket sensor. Buffers a message for each tip.
@@ -112,7 +97,6 @@ def rainfall_handler(pin: int) -> list:
         rainfall_timestamps.append(get_precise_timestamp())
     except:
         pass  # Avoid crashing on memory errors or overflow
-
 
 
 def publish_messages(client: MQTTClient) -> None:
@@ -157,7 +141,7 @@ def publish_status(client, reason="ok"):
         "uptime": time.ticks_ms() // 1000
     })
     try:
-        client.publish("rain_gauge_1/status", message)
+        client.publish("rain_gauge_station/status", message)
         print(f"Published status: {message}")
     except Exception as e:
         print("Failed to publish status:", e)
@@ -170,7 +154,7 @@ def publish_boot_status(client):
         "reason": "power_on"
     })
     try:
-        client.publish("rain_gauge_1/status/boot", message)
+        client.publish("rain_gauge_station/status/boot", message)
         print("Published boot status.")
     except Exception as e:
         print("Failed to publish boot status:", e)
@@ -184,7 +168,7 @@ def publish_heartbeat(client):
         "heap_free": gc.mem_free()
     })
     try:
-        client.publish("rain_gauge_1/status/heartbeat", message)
+        client.publish("rain_gauge_station/status/heartbeat", message)
         print("Published heartbeat.")
     except Exception as e:
         print("Failed to publish heartbeat:", e)
@@ -204,25 +188,26 @@ def main():
     Main loop to handle Wi-Fi connection, MQTT publishing, and tipping bucket data.
     """
     env_vars = load_env()
+    print("ENV VARS:", env_vars)
     wifi_ssid = env_vars.get("WIFI_SSID")
     wifi_password = env_vars.get("WIFI_PASSWORD")
     mqtt_broker_ip = env_vars.get("MQTT_BROKER_IP")
     mqtt_broker_port = int(env_vars.get("MQTT_BROKER_PORT"))
     mqtt_client_id = env_vars.get("MQTT_CLIENT_ID")
+    mqtt_username = env_vars.get("MQTT_USERNAME")
+    mqtt_password = env_vars.get("MQTT_PASSWORD")
 
     if not connect_wifi(wifi_ssid=wifi_ssid, wifi_password=wifi_password):
         print("Failed to connect to Wi-Fi.")
         return
 
     client = None
-    tipping_bucket = Pin(22, Pin.IN, Pin.PULL_UP)
+    tipping_bucket = Pin(16, Pin.IN, Pin.PULL_UP)
     tipping_bucket.irq(trigger=Pin.IRQ_FALLING, handler=rainfall_handler)
 
-    pgood_pin = Pin(16, Pin.IN, Pin.PULL_UP)
-
+    prior_onboard_temperature_value = None
     prior_temperature_value = None
-    prior_charge_value = None
-    
+
     heartbeat_interval = 300  # seconds
     last_heartbeat_time = time.time()
 
@@ -237,24 +222,31 @@ def main():
             while rainfall_timestamps:
                 ts = rainfall_timestamps.pop(0)  # Remove the oldest timestamp
                 message = ujson.dumps({"timestamp": ts})
-                unsent_messages.append(("rain_gauge_1/sensors/rain_gauge_tips", message))
+                unsent_messages.append(("rain_gauge_station/sensor/rain_gauge_tips", message))
                 print(f"Bucket tip recorded at {format_precise_timestamp(ts)}")
 
-            current_temp = read_onboard_temperature()
+            current_onboard_temp = read_onboard_temperature()
+            current_temp = read_temperature(pin=temperature_pin)
             timestamp = get_precise_timestamp()
 
-            prior_temperature_value = check_and_append_change(
-                current_temp,
-                "rain_gauge_1/sensors/temperature",
+            prior_onboard_temperature_value = check_and_append_change(
+                current_onboard_temp,
+                "rain_gauge_station/sensor/onboard_temperature",
                 timestamp,
-                prior_temperature_value,
+                prior_onboard_temperature_value,
                 change_threshold=1.0
             )
 
-            prior_charge_value = check_and_append_change(read_chg_pin(), "rain_gauge_1/sensors/charge_value", timestamp, prior_charge_value)
-            
+            prior_temperature_value = check_and_append_change(
+                current_temp,
+                "rain_gauge_station/sensor/temperature",
+                timestamp,
+                prior_temperature_value,
+                change_threshold=0.1
+            )
+
             if client is None:
-                client = connect_mqtt(mqtt_broker_ip, mqtt_broker_port, mqtt_client_id)
+                client = connect_mqtt(mqtt_broker_ip, mqtt_broker_port, mqtt_client_id, mqtt_username, mqtt_password)
                 if client:
                     publish_boot_status(client)
 
