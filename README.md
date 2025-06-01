@@ -1,2 +1,2 @@
 # drippy
-Drip system data collection and automation.
+Data collection and automation for [Petals by Pedal](petalsbypedal.com) farm.
