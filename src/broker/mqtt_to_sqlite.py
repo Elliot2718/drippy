@@ -4,8 +4,6 @@ import paho.mqtt.client as mqtt
 import os
 from typing import Tuple
 
-DATABASE = "~/drippy.db"
-
 def load_env(file_path: str = ".env") -> None:
     try:
         with open(file_path, "r") as file:
@@ -66,7 +64,6 @@ def on_message(client, userdata, msg):
 
 def main() -> None:
     load_env()
-    init_db(DATABASE)
     print("  MQTT_BROKER_IP:", os.environ.get("MQTT_BROKER_IP"))
     print("  MQTT_CLIENT_ID:", os.environ.get("MQTT_CLIENT_ID"))
     print("  MQTT_USERNAME:", os.environ.get("MQTT_USERNAME"))
@@ -76,7 +73,8 @@ def main() -> None:
     port = int(os.environ.get("MQTT_BROKER_PORT", "1883"))
     username = os.environ.get("MQTT_USERNAME")
     password = os.environ.get("MQTT_PASSWORD")
-
+    DATABASE = os.path.expanduser(os.environ.get("DATABASE_PATH"))
+    init_db(DATABASE)
     client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
 
     client.enable_logger()

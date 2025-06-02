@@ -1,9 +1,14 @@
 # api_server.py
 from flask import Flask, jsonify
+import os
 import sqlite3
 
+from mqtt_to_sqlite import load_env
+
 app = Flask(__name__)
-DB_PATH = "drippy.db"
+
+load_env()
+DB_PATH = os.path.expanduser(os.environ.get("DATABASE_PATH"))
 
 @app.route("/latest")
 def latest_data():
