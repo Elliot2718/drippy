@@ -18,6 +18,9 @@ def load_env(file_path: str = ".env") -> None:
     except FileNotFoundError:
         print(f"⚠️ Warning: {file_path} not found.")
 
+load_env()
+DATABASE = os.path.expanduser(os.environ.get("DATABASE_PATH", "~/drippy.db"))
+
 def init_db(database: str) -> None:
     conn = sqlite3.connect(database)
     cursor = conn.cursor()
@@ -63,11 +66,6 @@ def on_message(client, userdata, msg):
         print(f"❌ on_message() error: {e}")
 
 def main() -> None:
-    load_env()
-    print("  MQTT_BROKER_IP:", os.environ.get("MQTT_BROKER_IP"))
-    print("  MQTT_CLIENT_ID:", os.environ.get("MQTT_CLIENT_ID"))
-    print("  MQTT_USERNAME:", os.environ.get("MQTT_USERNAME"))
-    print("  MQTT_PASSWORD:", os.environ.get("MQTT_PASSWORD"))
     client_id = os.environ.get("MQTT_CLIENT_ID", "drippy_client")
     mqtt_broker = os.environ.get("MQTT_BROKER_IP", "localhost")
     port = int(os.environ.get("MQTT_BROKER_PORT", "1883"))
