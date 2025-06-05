@@ -1,7 +1,6 @@
+# Raspberry Pi Zero 2 W MQTT Broker and Service Setup
 
-# Raspberry Pi Zero 2 W MQTT Broker Setup
-
-This guide walks you through setting up a secure MQTT broker using Mosquitto on a Raspberry Pi Zero 2 W, and connecting a Pico device that publishes sensor data to the broker.
+This guide walks you through setting up a secure MQTT broker using Mosquitto on a Raspberry Pi Zero 2 W, connecting a Pico device that publishes sensor data to the broker, and creating a systemd service to automatically start the broker and a logging script at boot.
 
 ---
 
@@ -125,9 +124,90 @@ Client rain_gauge_station_pico connected with username 'rain_gauge_station'.
 
 ---
 
+## 🧩 8. Create a Service for Mosquitto and Logging Script
+
+This step creates a systemd service to automatically start the Mosquitto MQTT broker and your Python logging script at boot.
+
+### 1. Create Startup Script
+
+Create a file named `start_mqtt_services.sh`:
+
+```bash
+#!/bin/bash
+
+# Start Mosquitto broker
+mosquitto -c /etc/mosquitto/mosquitto.conf &
+
+# Optional: wait to ensure Mosquitto is running
+sleep 2
+
+# Start the Python script that logs MQTT to SQLite
+cd /home/username/your_project_directory
+python3 mqtt_to_sqlite.py &
+```
+
+Make it executable:
+
+```bash
+chmod +x /home/username/your_project_directory/start_mqtt_services.sh
+```
+
+### 2. Create systemd Service File
+
+Create the service unit file:
+
+```bash
+sudo nano /etc/systemd/system/mqtt_stack.service
+```
+
+Paste the following:
+
+```ini
+[Unit]
+Description=Start Mosquitto and MQTT logging script
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/username/your_project_directory/start_mqtt_services.sh
+Restart=on-failure
+User=username
+WorkingDirectory=/home/username/your_project_directory
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 3. Enable and Start the Service
+
+Reload systemd and enable the service:
+
+```bash
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl enable mqtt_stack.service
+sudo systemctl start mqtt_stack.service
+```
+
+### 4. Check Service Status
+
+To check if it's working:
+
+```bash
+sudo systemctl status mqtt_stack.service
+```
+
+Or to view logs:
+
+```bash
+journalctl -u mqtt_stack.service
+```
+
+---
+
 ## ✅ Done!
 
-You now have a secure MQTT broker running on your Pi Zero 2 W and a MicroPython-based Pico device publishing to it.
+You now have a secure MQTT broker running on your Pi Zero 2 W, a MicroPython-based Pico device publishing to it, and an automatic service that starts everything at boot.
 
 You can now subscribe to topics like:
 
@@ -136,3 +216,14 @@ mosquitto_sub -h 192.168.0.16 -u rain_gauge_station -P password -t "rain_gauge_s
 ```
 
 Enjoy building your sensor network!
+
+---
+
+## Notes
+
+- Make sure your script and its dependencies (e.g., Python packages) are installed and accessible to the `username` user.
+- You can add logging to the bash script if desired using redirection:
+
+  ```bash
+  python3 mqtt_to_sqlite.py >> log.txt 2>&1 &
+  ```
