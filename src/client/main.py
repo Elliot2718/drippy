@@ -242,7 +242,7 @@ def main():
                 "rain_gauge_station/sensor/temperature",
                 timestamp,
                 prior_temperature_value,
-                change_threshold=0.1
+                change_threshold=0.25
             )
 
             if client is None:
