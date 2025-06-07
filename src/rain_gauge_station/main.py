@@ -57,18 +57,17 @@ def connect_wifi(wifi_ssid: str, wifi_password: str) -> bool:
     return False
 
 
-def connect_mqtt(broker_ip: str, port: int, client_id: str, user: str, password: str) -> MQTTClient:
-    """
-    Create and connect an MQTT client to the broker.
-    """
-    try:
-        client = MQTTClient(client_id, broker_ip, port=port, user=user, password=password)
-        client.connect()
-        print(f"Connected to MQTT Broker at {broker_ip}:{port}")
-        return client
-    except Exception as e:
-        print(f"Error: Could not connect to MQTT Broker at {broker_ip}:{port}. {e}")
-        return None
+def connect_mqtt(broker_ip, port, client_id, user, password, retries=10, delay=3):
+    for attempt in range(retries):
+        try:
+            client = MQTTClient(client_id, broker_ip, port=port, user=user, password=password)
+            client.connect()
+            print(f"✅ Connected to MQTT Broker at {broker_ip}:{port}")
+            return client
+        except Exception as e:
+            print(f"❌ MQTT connect failed (attempt {attempt+1}/{retries}): {e}")
+            time.sleep(delay)
+    return None
 
 
 def get_precise_timestamp() -> str:
@@ -99,12 +98,14 @@ def rainfall_handler(pin: int) -> list:
         pass  # Avoid crashing on memory errors or overflow
 
 
-def publish_messages(client: MQTTClient) -> None:
+def publish_messages() -> None:
     """
     Publish all unsent messages to MQTT, continuing even if some fail.
     """
     if not unsent_messages:
         return
+
+    global client  # so we can reset it if needed
 
     for index, (topic, message) in enumerate(unsent_messages[:]):
         try:
@@ -113,6 +114,8 @@ def publish_messages(client: MQTTClient) -> None:
             unsent_messages.remove((topic, message))
         except Exception as e:
             print(f"[{index + 1}] Failed to publish {message} to {topic}: {e}")
+            client = None  # force reconnect
+            break
 
 
 def check_and_append_change(current_value, topic, timestamp, prior_value=None, change_threshold=None):
@@ -147,7 +150,8 @@ def publish_status(client, reason="ok"):
         print("Failed to publish status:", e)
 
 
-def publish_boot_status(client):
+def publish_boot_status():
+    global client
     message = ujson.dumps({
         "timestamp": get_precise_timestamp(),
         "status": "boot",
@@ -201,7 +205,11 @@ def main():
         print("Failed to connect to Wi-Fi.")
         return
 
+    global client, boot_sent
     client = None
+    boot_sent = False
+
+    # Set up tipping bucket interrupt
     tipping_bucket = Pin(16, Pin.IN, Pin.PULL_UP)
     tipping_bucket.irq(trigger=Pin.IRQ_FALLING, handler=rainfall_handler)
 
@@ -215,19 +223,22 @@ def main():
         while True:
             timestamp = get_precise_timestamp()
 
+            # Send heartbeat
             if time.time() - last_heartbeat_time >= heartbeat_interval:
-                publish_heartbeat(client)
+                if client:
+                    publish_heartbeat(client)
                 last_heartbeat_time = time.time()
 
+            # Drain rainfall events
             while rainfall_timestamps:
-                ts = rainfall_timestamps.pop(0)  # Remove the oldest timestamp
+                ts = rainfall_timestamps.pop(0)
                 message = ujson.dumps({"timestamp": ts})
                 unsent_messages.append(("rain_gauge_station/sensor/rain_gauge_tips", message))
                 print(f"Bucket tip recorded at {format_precise_timestamp(ts)}")
 
+            # Read temperatures
             current_onboard_temp = read_onboard_temperature()
             current_temp = read_temperature(pin=temperature_pin)
-            timestamp = get_precise_timestamp()
 
             prior_onboard_temperature_value = check_and_append_change(
                 current_onboard_temp,
@@ -246,19 +257,17 @@ def main():
             )
 
             if client is None:
-                client = connect_mqtt(mqtt_broker_ip, mqtt_broker_port, mqtt_client_id, mqtt_username, mqtt_password)
-                if client:
-                    publish_boot_status(client)
+                client = client = connect_mqtt(mqtt_broker_ip, mqtt_broker_port, mqtt_client_id, mqtt_username, mqtt_password)
+                if client and not boot_sent:
+                    publish_boot_status()
+                    boot_sent = True
 
-            if not client:
-                print("MQTT not connected — skipping publish cycle")
-                time.sleep(5)
-                continue
+            publish_messages()
 
-            publish_messages(client)
-    
+
             blink_led()
-            time.sleep(5)  # Wait before the next cycle
+            time.sleep(5)
+
     except KeyboardInterrupt:
         print("Stopping...")
     finally:
@@ -266,7 +275,7 @@ def main():
             publish_status(client, reason="shutdown")
             client.disconnect()
 
+
 # Run the main function
 if __name__ == "__main__":
     main()
-
