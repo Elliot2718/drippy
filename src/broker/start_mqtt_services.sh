@@ -1,9 +1,11 @@
 #!/bin/bash
 
-# start mosquitto broker
-mosquitto -c /etc/mosquitto/mosquitto.conf &
-
+# Wait for Mosquitto to initialize
 sleep 2
 
-cd /home/elliot.wargo/drippy
-python3 src/broker/mqtt_to_sqlite.py &
+# Change to your project directory
+cd /home/elliot.wargo/drippy/src/broker || exit
+
+# Activate virtual environment and run script in the same shell
+source env/bin/activate
+python3 mqtt_to_sqlite.py &

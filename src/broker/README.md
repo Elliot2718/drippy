@@ -128,31 +128,21 @@ Client rain_gauge_station_pico connected with username 'rain_gauge_station'.
 
 This step creates a systemd service to automatically start the Mosquitto MQTT broker and your Python logging script at boot.
 
-### 1. Create Startup Script
-
-Create a file named `start_mqtt_services.sh`:
-
+### 1. Enable Mosquitto as a systemd service
 ```bash
-#!/bin/bash
-
-# Start Mosquitto broker
-mosquitto -c /etc/mosquitto/mosquitto.conf &
-
-# Optional: wait to ensure Mosquitto is running
-sleep 2
-
-# Start the Python script that logs MQTT to SQLite
-cd /home/username/your_project_directory
-python3 mqtt_to_sqlite.py &
+sudo systemctl enable mosquitto
+sudo systemctl start mosquitto
 ```
 
-Make it executable:
+### 2. Create Startup Script
+
+Make the file `start_mqtt_services.sh` executable:
 
 ```bash
-chmod +x /home/username/your_project_directory/start_mqtt_services.sh
+chmod +x /home/username/drippy/src/broker/start_mqtt_services.sh
 ```
 
-### 2. Create systemd Service File
+### 3. Create systemd Service File
 
 Create the service unit file:
 
@@ -178,7 +168,7 @@ WorkingDirectory=/home/username/your_project_directory
 WantedBy=multi-user.target
 ```
 
-### 3. Enable and Start the Service
+### 4. Enable and Start the Service
 
 Reload systemd and enable the service:
 
@@ -189,7 +179,7 @@ sudo systemctl enable mqtt_stack.service
 sudo systemctl start mqtt_stack.service
 ```
 
-### 4. Check Service Status
+### 5. Check Service Status
 
 To check if it's working:
 
