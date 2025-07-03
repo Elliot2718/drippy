@@ -217,3 +217,17 @@ Enjoy building your sensor network!
   ```bash
   python3 mqtt_to_sqlite.py >> log.txt 2>&1 &
   ```
+
+### How to add a wifi network
+Bookworm uses network manager to manage wifi networks, not wpa_supplicant.conf. Manually add a network:
+```bash
+sudo nmcli connection add type wifi ssid "DeploymentNetworkSSID" \
+    -- wifi-sec.key-mgmt wpa-psk wifi-sec.psk "DeploymentPassword" \
+    connection.autoconnect yes \
+    connection.id "DeploymentNetworkSSID"
+```
+
+and set its priority:
+```bash
+sudo nmcli connection modify "DeploymentNetworkSSID" connection.autoconnect-priority 20
+```
