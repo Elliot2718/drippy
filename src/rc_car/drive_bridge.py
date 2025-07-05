@@ -31,6 +31,7 @@ STEER_NEUTRAL   = 1500           # µs
 STEER_SPAN      =  500           # ±500 → 1000–2000 µs
 
 ESC_NEUTRAL     = 1500           # µs  (idle / brake)
+
 ESC_SPAN        =  100           # µs  (±100 → 1400–1600 µs)
 
 ESC_ARM_TIME    = 2.0            # s   hold neutral on boot so ESC arms
