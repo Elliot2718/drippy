@@ -1,79 +1,75 @@
-<!doctype html><html><head>
+<!doctype html>
+<html>
+<head>
 <meta charset="utf-8">
 <title>Pi-Car Control</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <style>
+  /* --- layout ---------------------------------------------------- */
   html,body {margin:0;padding:0;background:#111;color:#eee;overflow:hidden}
   .row      {display:flex;height:100vh;flex-direction:row}
   #videoBox {flex:1;display:flex;justify-content:center;align-items:center}
   #video    {max-height:100%;max-width:100%;object-fit:contain;background:#000}
-  #stickBox {width:300px;position:relative;display:flex;justify-content:center;align-items:center}
-  #status, #toggle {position:fixed;top:8px;padding:4px 8px;border-radius:4px;font:14px sans-serif}
-  #status {left:100px;background:#222}
-  #toggle {left:8px;background:#444;cursor:pointer}
-  .nipple {opacity:.9}.nipple .back{border:2px solid #aaa;background:#333}.nipple .front{background:#fff}
+  #stickBox {width:320px;position:relative;display:flex;justify-content:center;align-items:center}
+  /* high-z so it floats over video if needed */
+  #status   {position:fixed;top:8px;left:8px;background:#222;padding:4px 8px;border-radius:4px;font:14px sans-serif}
+
+  /* --- nipple.js theme tweaks ----------------------------------- */
+  .nipple {opacity:.9}
+  .nipple .back  {border:2px solid #aaa;background:#333}
+  .nipple .front {background:#fff}
 </style>
+
+<!-- ① MQTT client -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+<!-- ② Thumb-stick lib -->
 <script src="https://cdn.jsdelivr.net/npm/nipplejs@0.9.0/dist/nipplejs.min.js"></script>
-</head><body>
+</head>
+
+<body>
 <div class="row">
-  <div id="videoBox"><img id="video"></div>
-  <div id="stickBox"></div>
+   <div id="videoBox">
+     <img id="video">
+   </div>
+   <div id="stickBox"><!-- nipple appears here --></div>
 </div>
-<div id="toggle">IP ⇄</div>
 <div id="status">⏳ connecting…</div>
 
 <script>
-/* -------- host toggle -------- */
-const hosts = ["192.168.1.42", "192.168.4.1"];   // [0]=home-LAN, [1]=hotspot
-let idx   = 0;                                   // start on hosts[0]
-let host  = hosts[idx];
+/* ---------- runtime URLs ---------- */
+const host = location.hostname || "picar.local";
+document.getElementById("video").src = `http://${host}:5000/stream.mjpg`;
 
-function switchHost(){
-  idx = (idx+1)%hosts.length;
-  host = hosts[idx];
-  document.getElementById('toggle').textContent = host;
-  setStatus("↻ reconnecting…");
-  video.src = `http://${host}:5000/stream.mjpg`;
-  mqttReconnect();
-}
-document.getElementById('toggle').addEventListener('click', switchHost);
+/* ---------- MQTT ---------- */
+const client = new Paho.Client(`ws://${host}:9001/`, "ui-"+Date.now());
+client.onConnectionLost = () => setStatus("🔌 lost");
+client.connect({timeout:3,onSuccess:() => setStatus("✅ MQTT OK"),
+                onFailure: () => setStatus("❌ connect failed")});
 
-/* -------- video -------- */
-const video = document.getElementById('video');
-video.src = `http://${host}:5000/stream.mjpg`;
-
-/* -------- MQTT -------- */
-let client = null;
-function mqttReconnect(){
-  if(client){ try{client.disconnect()}catch(e){} }
-  client = new Paho.Client(`ws://${host}:9001/`, "ui-"+Date.now());
-  client.onConnectionLost = ()=> setStatus("🔌 lost");
-  client.connect({
-    timeout:3,
-    onSuccess: ()=> setStatus("✅ MQTT @ "+host),
-    onFailure: ()=> setStatus("❌ connect failed")
-  });
-}
-mqttReconnect();   // initial
-
+/* helper */
 function publish(topic,val){
-  if(client && client.isConnected())
-       client.send(topic, JSON.stringify({value: val}), 0, false);
+  client.send(topic, JSON.stringify({value: val}), 0, false);
 }
-function setStatus(t){ document.getElementById('status').textContent=t; }
+function setStatus(t){ document.getElementById("status").textContent=t; }
 
-/* -------- thumb-stick -------- */
+/* ---------- thumb-stick ---------- */
 const nipple = nipplejs.create({
   zone: document.getElementById('stickBox'),
   mode: 'static',
-  color:'white',
-  size:200,
-  position:{left:'50%',top:'50%'}
+  color: 'white',
+  size: 180,
+  position: {left:'50%', top:'50%'}
 });
+
 let thr=0, steer=0;
-nipple.on('move',(_,d)=>{ steer=+(d.vector.x).toFixed(2); thr=+(-d.vector.y).toFixed(2); });
-nipple.on('end', ()=>{ thr=steer=0; });
-setInterval(()=>{ publish("car/throttle",thr); publish("car/steer",steer); },50);
+nipple.on('move', (_,data)=>{
+   steer = +(data.vector.x).toFixed(2);   // -1 … +1
+   thr   = +(data.vector.y).toFixed(2);  // up = +1 throttle
+});
+nipple.on('end', ()=>{thr=0; steer=0;});
+
+setInterval(()=>{ publish("car/throttle",thr);
+                  publish("car/steer",   steer); }, 50);  // 20 Hz
 </script>
-</body></html>
+</body>
+</html>
