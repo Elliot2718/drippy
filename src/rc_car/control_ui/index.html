@@ -1,63 +1,79 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Pi-Car Control</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>
-    body  {margin:0;background:#111;color:#eee;font:16px/1.4 sans-serif;text-align:center}
-    #video{width:100%;max-height:60vh;object-fit:contain;background:#000}
-    #status{position:fixed;top:6px;left:6px;background:#222;padding:4px 8px;border-radius:4px}
-  </style>
-
-  <!-- ①  Paho MQTT library – must be parsed BEFORE our code -->
-  <script src="paho-mqtt.js"></script>
-</head>
-<body>
-
-<img id="video">
+<!doctype html><html><head>
+<meta charset="utf-8">
+<title>Pi-Car Control</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<style>
+  html,body {margin:0;padding:0;background:#111;color:#eee;overflow:hidden}
+  .row      {display:flex;height:100vh;flex-direction:row}
+  #videoBox {flex:1;display:flex;justify-content:center;align-items:center}
+  #video    {max-height:100%;max-width:100%;object-fit:contain;background:#000}
+  #stickBox {width:300px;position:relative;display:flex;justify-content:center;align-items:center}
+  #status, #toggle {position:fixed;top:8px;padding:4px 8px;border-radius:4px;font:14px sans-serif}
+  #status {left:100px;background:#222}
+  #toggle {left:8px;background:#444;cursor:pointer}
+  .nipple {opacity:.9}.nipple .back{border:2px solid #aaa;background:#333}.nipple .front{background:#fff}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/nipplejs@0.9.0/dist/nipplejs.min.js"></script>
+</head><body>
+<div class="row">
+  <div id="videoBox"><img id="video"></div>
+  <div id="stickBox"></div>
+</div>
+<div id="toggle">IP ⇄</div>
 <div id="status">⏳ connecting…</div>
 
-<!-- ②  Our control code – runs after Paho is defined -->
 <script>
-console.log("Paho is", typeof Paho);          // should log “object”
+/* -------- host toggle -------- */
+const hosts = ["192.168.1.42", "192.168.4.1"];   // [0]=home-LAN, [1]=hotspot
+let idx   = 0;                                   // start on hosts[0]
+let host  = hosts[idx];
 
-/* ---------- runtime URLs ---------- */
-const host = location.hostname || "picar.local";
-document.getElementById("video").src = `http://${host}:5000/stream.mjpg`;
-
-/* ---------- MQTT ---------- */
-const client = new Paho.Client(
-      `ws://${host}:9001/`,                   // full WS URI
-      "ui-" + Date.now()                     // client-ID
-);
-
-client.onConnectionLost = () => setStatus("🔌 lost");
-client.connect({
-  timeout:3,
-  onSuccess: () => { setStatus("✅ MQTT OK"); driveLoop(); },
-  onFailure: () => setStatus("❌ connect failed")
-});
-
-/* ---------- keyboard handling ---------- */
-const down={}, map={87:"fwd",38:"fwd",83:"rev",40:"rev",65:"left",37:"left",68:"right",39:"right"};
-addEventListener("keydown",e=>down[map[e.keyCode]]=true);
-addEventListener("keyup",  e=>down[map[e.keyCode]]=false);
-
-function driveLoop(){
-  setInterval(()=>{
-     const thr   =(down.fwd?1:0)+(down.rev?-1:0);
-     const steer =(down.left?-1:0)+(down.right?1:0);
-     publish("car/throttle",thr);
-     publish("car/steer",steer);
-  },50);
+function switchHost(){
+  idx = (idx+1)%hosts.length;
+  host = hosts[idx];
+  document.getElementById('toggle').textContent = host;
+  setStatus("↻ reconnecting…");
+  video.src = `http://${host}:5000/stream.mjpg`;
+  mqttReconnect();
 }
+document.getElementById('toggle').addEventListener('click', switchHost);
+
+/* -------- video -------- */
+const video = document.getElementById('video');
+video.src = `http://${host}:5000/stream.mjpg`;
+
+/* -------- MQTT -------- */
+let client = null;
+function mqttReconnect(){
+  if(client){ try{client.disconnect()}catch(e){} }
+  client = new Paho.Client(`ws://${host}:9001/`, "ui-"+Date.now());
+  client.onConnectionLost = ()=> setStatus("🔌 lost");
+  client.connect({
+    timeout:3,
+    onSuccess: ()=> setStatus("✅ MQTT @ "+host),
+    onFailure: ()=> setStatus("❌ connect failed")
+  });
+}
+mqttReconnect();   // initial
 
 function publish(topic,val){
-  client.send(topic, JSON.stringify({value: val}), 0, false);
+  if(client && client.isConnected())
+       client.send(topic, JSON.stringify({value: val}), 0, false);
 }
+function setStatus(t){ document.getElementById('status').textContent=t; }
 
-function setStatus(txt){ document.getElementById("status").textContent = txt; }
+/* -------- thumb-stick -------- */
+const nipple = nipplejs.create({
+  zone: document.getElementById('stickBox'),
+  mode: 'static',
+  color:'white',
+  size:200,
+  position:{left:'50%',top:'50%'}
+});
+let thr=0, steer=0;
+nipple.on('move',(_,d)=>{ steer=+(d.vector.x).toFixed(2); thr=+(-d.vector.y).toFixed(2); });
+nipple.on('end', ()=>{ thr=steer=0; });
+setInterval(()=>{ publish("car/throttle",thr); publish("car/steer",steer); },50);
 </script>
-</body>
-</html>
+</body></html>
